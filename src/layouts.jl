@@ -25,6 +25,14 @@ MemoryLayout{T}(::StaticInt{N}) where {T,N} = StaticMemory{T,N}()
 """ AbstractArrayLayout """
 abstract type AbstractArrayLayout{T,N,L} <: AbstractLayout{T} end
 
+struct StrideLayout{T,N,L<:MemoryLayout{T},B,C,S,A<:Tuple{Vararg{Any,N}}} <: AbstractArrayLayout{T,N,L}
+    layout::L
+    batch_size::B
+    contiguous_dim::C
+    strides::S
+    axes::A
+end
+
 struct ArrayLayout{T,N,L<:AbstractLayout{T},Axes<:Tuple{Vararg{Any,N}}} <: AbstractArrayLayout{T,N,L}
     layout::L
     axes::Axes
