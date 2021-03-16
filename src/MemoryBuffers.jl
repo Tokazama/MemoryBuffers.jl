@@ -6,119 +6,17 @@ using Base.Broadcast: Broadcasted
 using Base: tail, @propagate_inbounds
 using LinearAlgebra
 
-export allocate, dereference, reallocate
-
-abstract type AbstractMemoryBuffer{T} <: AbstractVector{T} end
-
-abstract type AbstractMutableBuffer{T} <: AbstractMemoryBuffer{T} end
-
-abstract type AbstractImmutableBuffer{T} <: AbstractMemoryBuffer{T} end
-
-mutable struct StaticBuffer{T,N} <: AbstractMutableBuffer{T}
-    data::NTuple{N,T}
-end
-
-struct MutableBuffer{T} <: AbstractMutableBuffer{T}
-    data::StaticBuffer{T}
-    length::Int
-
-    MutableBuffer{T}(n::Int) where {T} = new{T}(StaticBuffer{T,n}(), n)
-end
-
-struct StaticImmutableBuffer{T,N} <: AbstractImmutableBuffer{T}
-    data::NTuple{N,T}
-end
-
-struct ImmutableBuffer{T} <: AbstractImmutableBuffer{T}
-    data::StaticImmutableBuffer{T}
-    length::Int
-
-    ImmutableBuffer(data::StaticImmutableBuffer{T}, length::Int) where {T} = new{T}(data, length)
-end
-
-@inline function Base.unsafe_convert(::Type{Ptr{T}}, d::StaticBuffer) where {T}
-    return Base.unsafe_convert(Ptr{T}, Base.pointer_from_objref(d.data.data))
-end
-@inline function Base.unsafe_convert(::Type{Ptr{T}}, d::MutableBuffer) where {T}
-    return Base.unsafe_convert(Ptr{T}, Base.pointer_from_objref(d.data.data))
-end
-
-@propagate_inbounds function Base.getindex(m::AbstractMutableBuffer{T}, i::Int) where {T}
-    @boundscheck checkbounds(m, i)
-    GC.@preserve m x = unsafe_load(pointer(m), i)
-    return x
-end
-@propagate_inbounds function Base.getindex(m::StaticImmutableBuffer{T}, i::Int) where {T}
-    @boundscheck checkbounds(m, i)
-    return @inbounds(getfield(m.data, i))
-end
-@propagate_inbounds function Base.getindex(m::ImmutableBuffer{T}, i::Int) where {T}
-    @boundscheck checkbounds(m, i)
-    return @inbounds(getfield(m.data.data, i))
-end
-@propagate_inbounds function Base.setindex!(m::AbstractMutableBuffer{T}, x, i::Int) where {T}
-    @boundscheck checkbounds(m, i)
-    GC.@preserve m unsafe_store!(pointer(m), convert(T, x), i)
-end
-
-ArrayInterface.known_length(::Type{StaticImmutableBuffer{T,N}}) where {T,N} = N
-ArrayInterface.known_length(::Type{StaticBuffer{T,N}}) where {T,N} = N
-ArrayInterface.size(m::MutableBuffer) = (static_length(m),)
-
-"""
-    MemoryLayout
-
-Supertype for specifying the layout of new instances of arrays.
-"""
-abstract type MemoryLayout{T} end
-
-struct DynamicBufferLayout{T} <: MemoryLayout{T}
-    length::Int
-end
-
-struct BufferLayout{T} <: MemoryLayout{T}
-    length::Int
-end
-
-struct StaticBufferLayout{T,N} <: MemoryLayout{T} end
-
-abstract type AbstractArrayLayout{T,N} <: MemoryLayout{T} end
-
-struct ArrayLayout{T,N,M<:MemoryLayout{T},Axes<:Tuple{Vararg{Any,N}}} <: AbstractArrayLayout{T,N}
-    memory::M
-    axes::Axes
-end
-Base.axes(x::ArrayLayout) = x.axes
-memory_layout(x::ArrayLayout) = x.memory
-
-struct DiagonalLayout{T,V<:ArrayLayout{T,1}} <: AbstractArrayLayout{T,2}
-    layout::V
-end
-function Base.axes(x::DiagonalLayout)
-    axis = first(axes(x.layout))
-    return (axis, axis)
-end
-memory_layout(x::DiagonalLayout) = memory_layout(x.layout)
-
-
-MemoryLayout{T}(n::Int) where {T} = BufferLayout{T}(n)
-MemoryLayout{T}(::StaticInt{N}) where {T,N} = StaticBufferLayout{T,N}()
-function MemoryLayout{T}(x::Tuple) where {T}
-    return ArrayLayout{T}(MemoryLayout{T}(prod(map(static_length, x)), x))
-end
-
-""" layout """
-layout(x::AbstractArray{T}) where {T} = MemoryLayout{T}(axes(x))
-layout(x::Diagonal) = DiagonalLayout(layout(x.diag))
+include("layouts.jl")
+include("buffers.jl")
 
 """ allocate """
-function allocate(::Union{CPUPointer,CPUTuple}, x::DynamicBufferLayout{T}) where {T}
+function allocate(::Union{CPUPointer,CPUTuple}, x::DynamicMemory{T}) where {T}
     return Vector{T}(undef, length(x))
 end
-function allocate(::Union{CPUPointer,CPUTuple}, x::StaticBufferLayout{T,L}) where {T,L}
+function allocate(::Union{CPUPointer,CPUTuple}, x::StaticMemory{T,L}) where {T,L}
     return StaticBuffer{T,L}()
 end
-function allocate(::Union{CPUPointer,CPUTuple}, x::BufferLayout{T}) where {T}
+function allocate(::Union{CPUPointer,CPUTuple}, x::FixedMemory{T}) where {T}
     return MutableBuffer{T}(length(x))
 end
 
@@ -166,30 +64,6 @@ end
 function materialize!(dst, bc::Broadcasted)
     preserve(bc.f, buffer_pointer(dst, bc.args...))
     return dereference(dst)
-end
-
-@inline combine_layouts(A, B...) = broadcast_layout(layout(A), combine_layouts(B...))
-@inline combine_layouts(A, B) = broadcast_layout(layout(A), layout(B))
-combine_layout(A) = broadcast_layout(layout(A))
-
-
-broadcast_layout(x) = x
-broadcast_layout(x, y, zs...) = broadcast_layout(broadcast_layout(x, y), zs...)
-function broadcast_layout(x::DiagonalLayout, y::DiagonalLayout)
-    return DiagonalLayout(broadcast_layout(x.layout, y.layout))
-end
-function broadcast_layout(x::AbstractArrayLayout, y::AbstractArrayLayout)
-    return ArrayLayout(
-        combine_layout(memory_layout(x), memory_layout(y)),
-        _bcs(axes(x), axes(y))
-    )
-end
-
-_bcs(::Tuple{}, ::Tuple{}) = ()
-_bcs(::Tuple{}, y::Tuple) = (first(y), _bcs((), tail(y))...)
-_bcs(shape::Tuple, ::Tuple{}) = (shape[1], _bcs(tail(shape), ())...)
-function _bcs(x::Tuple, y::Tuple)
-    return (ArrayInterface.broadcast_axis(first(x), first(y)), _bcs(tail(x), tail(y))...)
 end
 
 ###
