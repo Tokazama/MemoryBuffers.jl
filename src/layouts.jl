@@ -67,7 +67,7 @@ function layout(x::AbstractArray{T,N}) where {T,N}
 end
 function layout(x::AbstractVector{T}) where {T}
     if ArrayInterface.can_change_size(x)
-        return DynamicMemory
+        return DynamicMemory(length(x))
     else
         return MemoryLayout{T}(length(x))
     end
