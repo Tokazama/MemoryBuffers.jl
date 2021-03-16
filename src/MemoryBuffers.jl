@@ -56,7 +56,7 @@ buffer_pointer(x) = x, pointer(x)
 ### broadcast interface
 ###
 @inline function instantiate(bc::Broadcasted)
-    return materialize!(allocate(device(bc), combine_layouts(bc.args...)), bc)
+    return materialize!(allocate(device(bc), combine_layouts(bc)), bc)
 end
 
 # this method needs to change to facilitate iteration or `f` needs to be initialized to be
