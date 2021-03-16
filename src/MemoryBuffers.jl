@@ -3,7 +3,7 @@ module MemoryBuffers
 using ArrayInterface
 using ArrayInterface: AbstractDevice, CPUPointer, CPUTuple, static_length, StaticInt
 using Base.Broadcast: Broadcasted
-using Base: tail, @propagate_inbounds
+using Base: tail, @propagate_inbounds, AbstractBroadcasted
 using LinearAlgebra
 
 include("layouts.jl")

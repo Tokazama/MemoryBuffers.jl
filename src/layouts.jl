@@ -25,27 +25,45 @@ MemoryLayout{T}(::StaticInt{N}) where {T,N} = StaticMemory{T,N}()
 """ AbstractArrayLayout """
 abstract type AbstractArrayLayout{T,N,L} <: AbstractLayout{T} end
 
-struct StrideLayout{T,N,L<:MemoryLayout{T},B,C,S,A<:Tuple{Vararg{Any,N}}} <: AbstractArrayLayout{T,N,L}
+struct StrideLayout{T,N,L<:MemoryLayout{T},B,C,S,I<:Tuple{Vararg{Any,N}}} <: AbstractArrayLayout{T,N,L}
     layout::L
-    batch_size::B
-    contiguous_dim::C
+    contiguous_batch_size::B
+    contiguous_axis::C
     strides::S
-    axes::A
+    indices::I
+
+    function StrideLayout(x::AbstractArray{T,N}) where {T,N}
+        inds = map(ArrayInterface.indices, axes(x))
+        m = MemoryLayout{T}(prod(map(static_length, inds)))
+        b = ArrayInterface.contiguous_batch_size(x)
+        c = ArrayInterface.contiguous_axis(x)
+        s = ArrayInterface.strides(x)
+        return new{T,N,typeof(m),typeof(b),typeof(c),typeof(s),typeof(inds)}(
+            m, b, c, s, inds
+        )
+    end
 end
 
-struct ArrayLayout{T,N,L<:AbstractLayout{T},Axes<:Tuple{Vararg{Any,N}}} <: AbstractArrayLayout{T,N,L}
+struct ArrayLayout{T,N,L<:AbstractLayout{T},I<:Tuple{Vararg{Any,N}}} <: AbstractArrayLayout{T,N,L}
     layout::L
-    axes::Axes
+    indices::I
 end
 
-struct DiagonalLayout{T,V<:ArrayLayout{T,1}} <: AbstractArrayLayout{T,2}
-    layout::V
+abstract type SparseLayout{T,N,L} <: AbstractArrayLayout{T,N,L} end
+
+struct DiagonalLayout{T,L<:ArrayLayout{T,1}} <: SparseLayout{T,2,L}
+    layout::L
 end
 
 """ layout """
 function layout(x::AbstractArray{T,N}) where {T,N}
-    ax = axes(x)
-    return ArrayLayout(MemoryLayout{T}(prod(map(static_length, ax))), ax)
+    if ArrayInterface.defines_strides(x)
+        return StrideLayout(x)
+    else
+        return ArrayLayout(x)
+    end
+    inds = map(ArrayInterface.indices, axes(x))
+    return ArrayLayout(MemoryLayout{T}(prod(map(static_length, inds))), inds)
 end
 function layout(x::AbstractVector{T}) where {T}
     if ArrayInterface.can_change_size(x)
